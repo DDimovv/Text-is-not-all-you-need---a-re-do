@@ -1,7 +1,6 @@
 import os
 import json
 import random
-import subprocess
 import torch
 from tqdm import tqdm
 import soundfile as sf
@@ -21,7 +20,6 @@ SEED = 42
 MODEL_ID = "Qwen/Qwen2-Audio-7B-Instruct"
 MAX_NEW_TOKENS = 120
 
-PIPER_MODEL = "/content/piper_models/en_US-lessac-medium.onnx"
 AUDIO_DIR = "cache/tts"
 AUDIO_EXT = ".wav"
 
@@ -53,11 +51,11 @@ Instructions:
 - Do NOT define what a pun is.
 - Focus ONLY on the linguistic mechanism.
 - If the text is a pun, clearly state:
-  • the word or phrase involved
-  • the two meanings or sound-based ambiguity
+  â€¢ the word or phrase involved
+  â€¢ the two meanings or sound-based ambiguity
 - If it is not a pun, clearly state that no wordplay or ambiguity is present.
 
-Write a concise paragraph (3–6 sentences).
+Write a concise paragraph (3â€“6 sentences).
 
 Text:
 {text}
@@ -76,10 +74,8 @@ def load_audio(path, target_sr=16000):
         wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
     return wav
 
-
-
-#------------------PHASE A - OFFLINE TTS----------------
-print("=== Phase A: Generating TTS ===")
+#------------------PHASE A - LOAD PIPER OUTPUTS----------------
+print("=== Phase A: Loading pre-generated Piper audio ===")
 
 ds = load_dataset(HF_DATASET, split=HF_SPLIT)
 
@@ -103,55 +99,34 @@ for t in grouped:
     rng.shuffle(grouped[t])
     items.extend(grouped[t][:PER_TYPE])
 
-def generate_tts(text, uid):
-    out_wav = os.path.join(AUDIO_DIR, uid + AUDIO_EXT)
+missing = []
+bad = []
+for it in tqdm(items, desc="Checking audio"):
+    wav_path = os.path.join(AUDIO_DIR, it["id"] + AUDIO_EXT)
+    if not os.path.exists(wav_path) or os.path.getsize(wav_path) < 1000:
+        missing.append(it["id"])
+        continue
 
-    if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1000:
-        return True
+    try:
+        info = sf.info(wav_path)
+        if info.frames == 0:
+            bad.append(it["id"])
+    except Exception:
+        bad.append(it["id"])
 
-    p = subprocess.run(
-        [
-            "piper",
-            "--model", PIPER_MODEL,
-            "--output_file", out_wav,
-        ],
-        input=text + "\n",
-        text=True,
-        capture_output=True,
+print(f"Found Piper audio for {len(items) - len(missing)}/{len(items)} sampled items")
+if missing:
+    raise FileNotFoundError(
+        f"Missing Piper audio for {len(missing)} sampled items in {AUDIO_DIR}. "
+        "Run scripts/semeval/phase2_tts_piper.py first."
+    )
+if bad:
+    raise RuntimeError(
+        f"Invalid WAV files for {len(bad)} sampled items in {AUDIO_DIR}."
     )
 
-    if p.returncode != 0:
-        print(f"[PIPER ERROR] {uid}")
-        print(p.stderr)
-        return False
 
-    if not os.path.exists(out_wav) or os.path.getsize(out_wav) < 1000:
-        return False
-
-    return True
-
-ok = 0
-for it in tqdm(items, desc="TTS"):
-    if generate_tts(it["text"], it["id"]):
-        ok += 1
-
-print(f"TTS generated for {ok}/{len(items)} items")
-
-# ---------------VERIFY WAVS---------------
-bad = []
-for fn in os.listdir(AUDIO_DIR):
-    try:
-        info = sf.info(os.path.join(AUDIO_DIR, fn))
-        if info.frames == 0:
-            bad.append(fn)
-    except:
-        bad.append(fn)
-
-print("Bad wav files:", len(bad))
-assert len(bad) == 0, "Some WAV files are invalid"
-
-
-#-------------------PHASE B — QWEN2-AUDIO-------------------
+#-------------------PHASE B â€” QWEN2-AUDIO-------------------
 print("=== Phase B: Qwen2-Audio inference ===")
 
 device = "cuda"

@@ -126,7 +126,7 @@ if bad:
     )
 
 
-#-------------------PHASE B â€” QWEN2-AUDIO-------------------
+#-------------------PHASE B - ” QWEN2-AUDIO-------------------
 print("=== Phase B: Qwen2-Audio inference ===")
 
 device = "cuda"
